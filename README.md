@@ -10,6 +10,22 @@ also control your phone or desktop app.
 
 **Requirements:** Spotify Premium (needed for playback, and for the app owner since Spotify's 2026 rules).
 
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/iraosandeep/go-spotify/main/install.sh | sh
+```
+
+This downloads the binary for your OS/arch from the latest GitHub release into `~/.local/bin` (or set
+`INSTALL_DIR`; pin a version with `VERSION=0.1.0`). Builds exist for macOS, Linux, Windows and FreeBSD.
+
+Or build from source (Go 1.25+ and [Bun](https://bun.sh) for the UI bundle):
+
+```bash
+make build
+install -d ~/.local/bin && install gospotify ~/.local/bin/
+```
+
 ## Setup
 
 1. Create an app at <https://developer.spotify.com/dashboard>. Tick **Web API** and **Web Playback SDK**.
@@ -17,8 +33,8 @@ also control your phone or desktop app.
 3. Run it:
 
 ```bash
-make build
-./gospotify -client-id <your client id>   # or paste the ID into the UI on first run
+gospotify -client-id <your client id>   # or paste the ID into the UI on first run
+gospotify                               # afterwards
 ```
 
 The client ID and your token are saved to `~/.config/go-spotify/config.json` (mode 0600).
@@ -98,6 +114,11 @@ web/         React UI, bundled by Bun into web/dist (embedded via go:embed)
 ```
 
 ```bash
-make dev    # rebuild the UI and run with it served from disk
-make test   # go test ./...
+make dev               # rebuild the UI and run with it served from disk
+make test              # go test ./...
+make dist              # cross-compile linux/darwin/windows/freebsd into dist/
+make publish 0.2.0     # bump VERSION, commit, tag; push the tag to trigger the GitHub release
+```
+
+`web/dist` is committed so `go build` works without Bun; run `make web` after changing the UI.
 ```

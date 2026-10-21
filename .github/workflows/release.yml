@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to release (e.g. v0.2.0)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Release gospotify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Determine version
+        id: version
+        run: |
+          TAG="${{ github.event.inputs.version }}"
+          [ -z "$TAG" ] && TAG="${GITHUB_REF#refs/tags/}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "${TAG#v}" > VERSION
+
+      - name: Test
+        run: |
+          (cd web && bun install --frozen-lockfile && bun run build)
+          go test ./...
+
+      - name: Build binaries
+        run: ./build.sh
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/gospotify-*
+            dist/checksums.txt
