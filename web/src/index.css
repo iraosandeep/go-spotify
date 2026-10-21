@@ -1,0 +1,40 @@
+@import "tailwindcss";
+
+/* Nord-inspired terminal palette (cliamp look). */
+@theme {
+  --color-tui-bg: #2e3440;
+  --color-tui-fg: #d8dee9;
+  --color-tui-bright: #eceff4;
+  --color-tui-dim: #7b88a1;
+  --color-tui-badge: #4c566a;
+  --color-tui-yellow: #ebcb8b;
+  --color-tui-green: #a3be8c;
+  --color-tui-red: #bf616a;
+  --color-tui-blue: #81a1c1;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    @apply m-0 min-w-[320px] bg-tui-bg text-tui-fg;
+    font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
+    font-size: 15px;
+    line-height: 1.4;
+    font-variant-ligatures: none;
+  }
+
+  ::selection {
+    @apply bg-tui-yellow text-tui-bg;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-tui-badge;
+  }
+}
