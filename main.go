@@ -23,6 +23,16 @@ var rawVersion string
 var version = strings.TrimSpace(rawVersion)
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "tui":
+			runTUICommand(os.Args[2:])
+			return
+		case "update":
+			runUpdateCommand(os.Args[2:])
+			return
+		}
+	}
 	var (
 		port     = flag.Int("port", 7172, "port to listen on; must match the redirect URI registered for your Spotify app")
 		clientID = flag.String("client-id", "", "Spotify app client ID (saved for next time; or set SPOTIFY_CLIENT_ID)")
@@ -33,7 +43,12 @@ func main() {
 		quiet    = flag.Bool("quiet", false, "suppress narration")
 	)
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "gospotify %s - a terminal-styled Spotify player in your browser\n\nusage: gospotify [flags] [spotify link]\n\nflags:\n", version)
+		fmt.Fprintf(os.Stderr, "gospotify %s - a terminal-styled Spotify player\n\n"+
+			"usage:\n"+
+			"  gospotify [flags] [spotify link]   run the browser UI\n"+
+			"  gospotify tui [flags] [link]       run the terminal UI\n"+
+			"  gospotify update [flags]           update to the latest release\n\n"+
+			"flags for the browser UI:\n", version)
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -105,6 +120,40 @@ func main() {
 	}()
 
 	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		fatal(err)
+	}
+}
+
+// runTUICommand runs `gospotify tui`: the same player and library, driven entirely from the
+// terminal. It remote-controls a Spotify Connect device (phone, desktop app, speaker…) instead of
+// playing audio itself, since that needs the Web Playback SDK, which only runs in a browser.
+func runTUICommand(args []string) {
+	fs := flag.NewFlagSet("tui", flag.ExitOnError)
+	port := fs.Int("port", 7172, "port to listen on for the Spotify login callback; must match the redirect URI registered for your Spotify app")
+	clientID := fs.String("client-id", "", "Spotify app client ID (saved for next time; or set SPOTIFY_CLIENT_ID)")
+	noOpen := fs.Bool("no-open", false, "do not launch a browser to log in; print the URL instead")
+	noColor := fs.Bool("no-color", false, "disable colour output")
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "gospotify tui %s - the same player, driven from your terminal\n\nusage: gospotify tui [flags] [spotify link]\n\nflags:\n", version)
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if *noColor {
+		f := false
+		uiForcedColor = &f
+	}
+
+	cfg := loadConfig(configPath())
+	if id := firstNonEmpty(*clientID, os.Getenv("SPOTIFY_CLIENT_ID")); id != "" {
+		if err := cfg.setClientID(id); err != nil {
+			fatal(fmt.Errorf("could not save config: %w", err))
+		}
+	}
+
+	link := strings.Join(fs.Args(), " ")
+	redirectURI := "http://" + net.JoinHostPort("127.0.0.1", fmt.Sprint(*port)) + "/callback"
+	if err := RunTUI(cfg, redirectURI, *noOpen, link); err != nil {
 		fatal(err)
 	}
 }

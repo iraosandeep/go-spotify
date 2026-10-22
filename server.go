@@ -12,7 +12,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -41,15 +40,16 @@ func useDiskAssets(dir string) error {
 }
 
 type Server struct {
-	cfg  *Config
-	auth *Auth
-	sp   *Spotify
-	lib  *Library
-	mux  *http.ServeMux
+	cfg    *Config
+	auth   *Auth
+	sp     *Spotify
+	lib    *Library
+	player *Player
+	mux    *http.ServeMux
 }
 
 func NewServer(cfg *Config, auth *Auth, sp *Spotify) *Server {
-	s := &Server{cfg: cfg, auth: auth, sp: sp, lib: NewLibrary(sp), mux: http.NewServeMux()}
+	s := &Server{cfg: cfg, auth: auth, sp: sp, lib: NewLibrary(sp), player: NewPlayer(sp), mux: http.NewServeMux()}
 	s.mux.HandleFunc("GET /login", s.handleLogin)
 	s.mux.HandleFunc("GET /callback", s.handleCallback)
 	s.mux.HandleFunc("POST /api/logout", s.handleLogout)
@@ -151,29 +151,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-type session struct {
-	Configured  bool   `json:"configured"`
-	LoggedIn    bool   `json:"loggedIn"`
-	User        *User  `json:"user,omitempty"`
-	RedirectURI string `json:"redirectUri"`
-	Error       string `json:"error,omitempty"`
-}
-
 func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
-	out := session{Configured: s.cfg.clientID() != "", RedirectURI: s.auth.redirectURI}
-	if out.Configured && s.cfg.token() != nil {
-		var u User
-		err := s.sp.get(r.Context(), "/me", nil, &u)
-		switch {
-		case err == nil:
-			out.LoggedIn, out.User = true, &u
-		case errors.Is(err, errNotLoggedIn):
-		default:
-			out.LoggedIn = s.cfg.token() != nil
-			out.Error = err.Error()
-		}
-	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, http.StatusOK, checkSession(r.Context(), s.cfg, s.sp, s.auth.redirectURI))
 }
 
 func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -212,90 +191,23 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, l)
 }
 
-// TrackInfo is the now-playing track as the UI shows it.
-type TrackInfo struct {
-	Name       string `json:"name"`
-	URI        string `json:"uri"`
-	Artists    string `json:"artists"`
-	Album      string `json:"album"`
-	DurationMs int    `json:"durationMs"`
-}
-
-type Device struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	IsActive bool   `json:"is_active"`
-	Volume   *int   `json:"volume_percent"`
-}
-
-// PlayerState is the playback state of whichever device is active, for when it isn't this page.
-type PlayerState struct {
-	Device     Device     `json:"device"`
-	Playing    bool       `json:"playing"`
-	PositionMs int        `json:"positionMs"`
-	Shuffle    bool       `json:"shuffle"`
-	Repeat     string     `json:"repeat"`
-	Track      *TrackInfo `json:"track"`
-}
-
 func (s *Server) handlePlayer(w http.ResponseWriter, r *http.Request) {
-	var raw struct {
-		Device     *Device `json:"device"`
-		IsPlaying  bool    `json:"is_playing"`
-		ProgressMs int     `json:"progress_ms"`
-		Shuffle    bool    `json:"shuffle_state"`
-		Repeat     string  `json:"repeat_state"`
-		Item       *Track  `json:"item"`
-	}
-	if err := s.sp.get(r.Context(), "/me/player", url.Values{"additional_types": {"episode"}}, &raw); err != nil {
+	st, err := s.player.State(r.Context())
+	if err != nil {
 		apiFail(w, err)
 		return
-	}
-	if raw.Device == nil { // 204: nothing playing anywhere.
-		writeJSON(w, http.StatusOK, nil)
-		return
-	}
-	st := PlayerState{Device: *raw.Device, Playing: raw.IsPlaying, PositionMs: raw.ProgressMs, Shuffle: raw.Shuffle, Repeat: raw.Repeat}
-	if t := raw.Item; t != nil {
-		st.Track = &TrackInfo{Name: t.Name, URI: t.URI, Artists: artistNames(t.Artists), DurationMs: t.DurationMs}
-		if t.Album != nil {
-			st.Track.Album = t.Album.Name
-		} else if t.Show != nil {
-			st.Track.Album = t.Show.Name
-		}
 	}
 	writeJSON(w, http.StatusOK, st)
 }
 
 func (s *Server) handleDevices(w http.ResponseWriter, r *http.Request) {
-	var res struct {
-		Devices []Device `json:"devices"`
-	}
-	if err := s.sp.get(r.Context(), "/me/player/devices", nil, &res); err != nil {
+	devs, err := s.player.Devices(r.Context())
+	if err != nil {
 		apiFail(w, err)
 		return
 	}
-	if res.Devices == nil {
-		res.Devices = []Device{}
-	}
-	writeJSON(w, http.StatusOK, res.Devices)
+	writeJSON(w, http.StatusOK, devs)
 }
-
-// playerAction is the body of POST /api/player/{action}.
-type playerAction struct {
-	DeviceID   string   `json:"deviceId"`
-	Context    string   `json:"context"`
-	URIs       []string `json:"uris"`
-	OffsetURI  string   `json:"offsetUri"`
-	PositionMs int      `json:"positionMs"`
-	Volume     int      `json:"volume"`
-	Shuffle    bool     `json:"shuffle"`
-	Repeat     string   `json:"repeat"`
-	Play       bool     `json:"play"`
-}
-
-const maxQueueURIs = 500
 
 func (s *Server) handlePlayerAction(w http.ResponseWriter, r *http.Request) {
 	var a playerAction
@@ -305,88 +217,22 @@ func (s *Server) handlePlayerAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	q := url.Values{}
-	if a.DeviceID != "" {
-		q.Set("device_id", a.DeviceID)
-	}
-	var (
-		method = http.MethodPut
-		p      string
-		body   any
-	)
-	switch r.PathValue("action") {
-	case "play": // Start a context or a list of tracks.
-		b := map[string]any{}
+	if err := s.player.Do(r.Context(), r.PathValue("action"), a); err != nil {
 		switch {
-		case a.Context != "":
-			b["context_uri"] = a.Context
-			if a.OffsetURI != "" {
-				b["offset"] = map[string]string{"uri": a.OffsetURI}
-			}
-		case len(a.URIs) > 0:
-			uris := a.URIs
-			if len(uris) > maxQueueURIs { // Keep the request small: start from the chosen track.
-				i := max(0, indexOf(uris, a.OffsetURI))
-				uris = uris[i:min(len(uris), i+maxQueueURIs)]
-			}
-			b["uris"] = uris
-			if a.OffsetURI != "" {
-				b["offset"] = map[string]string{"uri": a.OffsetURI}
-			}
-		default:
+		case errors.Is(err, errNothingToPlay):
 			writeError(w, http.StatusBadRequest, "Nothing to play")
-			return
-		}
-		p, body = "/me/player/play", b
-	case "resume":
-		p = "/me/player/play"
-	case "pause":
-		p = "/me/player/pause"
-	case "next":
-		method, p = http.MethodPost, "/me/player/next"
-	case "previous":
-		method, p = http.MethodPost, "/me/player/previous"
-	case "seek":
-		p = "/me/player/seek"
-		q.Set("position_ms", strconv.Itoa(max(0, a.PositionMs)))
-	case "volume":
-		p = "/me/player/volume"
-		q.Set("volume_percent", strconv.Itoa(min(100, max(0, a.Volume))))
-	case "shuffle":
-		p = "/me/player/shuffle"
-		q.Set("state", strconv.FormatBool(a.Shuffle))
-	case "repeat":
-		if a.Repeat != "off" && a.Repeat != "context" && a.Repeat != "track" {
-			writeError(w, http.StatusBadRequest, "repeat must be off, context or track")
-			return
-		}
-		p = "/me/player/repeat"
-		q.Set("state", a.Repeat)
-	case "transfer":
-		if a.DeviceID == "" {
+		case errors.Is(err, errMissingDeviceID):
 			writeError(w, http.StatusBadRequest, "Missing deviceId")
-			return
+		case errors.Is(err, errBadRepeatValue):
+			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, errUnknownPlayerAction):
+			writeError(w, http.StatusNotFound, "Unknown action")
+		default:
+			apiFail(w, err)
 		}
-		p, q = "/me/player", nil
-		body = map[string]any{"device_ids": []string{a.DeviceID}, "play": a.Play}
-	default:
-		writeError(w, http.StatusNotFound, "Unknown action")
-		return
-	}
-	if err := s.sp.do(r.Context(), method, p, q, body, nil); err != nil {
-		apiFail(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-func indexOf(xs []string, x string) int {
-	for i, v := range xs {
-		if v == x {
-			return i
-		}
-	}
-	return -1
 }
 
 // handleStatic serves the embedded UI; unknown paths fall back to index.html.

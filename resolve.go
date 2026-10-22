@@ -94,7 +94,7 @@ func expandShortLink(ctx context.Context, link string) (string, error) {
 
 // Resolve turns a pasted link into something to show and play. Names are best effort: Spotify
 // hides some objects (e.g. its editorial playlists) from apps, but they still play.
-func (s *Server) Resolve(ctx context.Context, link string) (*Resolved, error) {
+func Resolve(ctx context.Context, sp *Spotify, link string) (*Resolved, error) {
 	link = strings.TrimSpace(link)
 	if shortRe.MatchString(link) {
 		full, err := expandShortLink(ctx, link)
@@ -116,7 +116,7 @@ func (s *Server) Resolve(ctx context.Context, link string) (*Resolved, error) {
 	if kind == "playlist" {
 		q.Set("fields", "name")
 	}
-	if err := s.sp.get(ctx, "/"+kind+"s/"+id, q, &meta); err != nil {
+	if err := sp.get(ctx, "/"+kind+"s/"+id, q, &meta); err != nil {
 		if st := statusOf(err); st != 403 && st != 404 {
 			return nil, err
 		}
@@ -147,7 +147,7 @@ func (s *Server) Resolve(ctx context.Context, link string) (*Resolved, error) {
 }
 
 func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
-	res, err := s.Resolve(r.Context(), r.URL.Query().Get("url"))
+	res, err := Resolve(r.Context(), s.sp, r.URL.Query().Get("url"))
 	if errors.Is(err, errNotSpotifyLink) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

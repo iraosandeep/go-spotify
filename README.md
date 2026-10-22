@@ -1,12 +1,21 @@
 # gospotify
 
-A terminal-styled Spotify player that runs in your browser. It is a single Go binary with the UI
-embedded, and it looks and drives like [vstream](https://github.com/iraosandeep/go-v-stream): a library
-browser, a spectrum visualiser, a seek line, a Settings panel, and full keyboard control.
+A terminal-styled Spotify player. It is a single Go binary with two front ends — a browser UI and a real
+terminal UI — and it looks and drives like [vstream](https://github.com/iraosandeep/go-v-stream): a
+library browser, a spectrum visualiser, a seek line, a Settings panel, and full keyboard control.
 
-The Go server talks to the Spotify Web API (OAuth with PKCE, library, search, playback control). The page
-becomes a Spotify Connect device through the Web Playback SDK, so audio plays right in the browser. It can
-also control your phone or desktop app.
+```bash
+gospotify         # browser UI, with in-browser playback via the Web Playback SDK
+gospotify tui     # terminal UI, remote-controlling a device you're already signed into
+```
+
+The Go side talks to the Spotify Web API (OAuth with PKCE, library, search, playback control) for both.
+The **browser UI** turns the page itself into a Spotify Connect device through the Web Playback SDK, so
+audio plays right there, as well as being able to control your phone or desktop app. The **terminal UI**
+can't do that — the Web Playback SDK only runs inside a browser — so it always remote-controls whichever
+Spotify Connect device (phone, desktop app, speaker…) is already playing, the same way the browser UI
+does when it isn't the active device. Logging in still opens a browser once, for Spotify's OAuth consent
+screen; everything else in `tui` mode stays in the terminal.
 
 **Requirements:** Spotify Premium (needed for playback, and for the app owner since Spotify's 2026 rules).
 
@@ -25,6 +34,18 @@ Or build from source (Go 1.25+ and [Bun](https://bun.sh) for the UI bundle):
 make build
 install -d ~/.local/bin && install gospotify ~/.local/bin/
 ```
+
+## Update
+
+```bash
+gospotify update           # checks and installs the latest release
+gospotify update -check    # just checks, doesn't install
+gospotify update -version 0.2.0   # install a specific version
+```
+
+It downloads the matching binary from the same GitHub releases install.sh uses, verifies it against the
+release's checksum, and replaces the running binary in place. If it was installed to a location you don't
+own (e.g. `/usr/local/bin` via sudo), run `sudo gospotify update` instead.
 
 ## Setup
 
@@ -45,6 +66,10 @@ The client ID and your token are saved to `~/.config/go-spotify/config.json` (mo
 | `-client-id` | | Spotify client ID (or `SPOTIFY_CLIENT_ID`) |
 | `-no-open` | | Don't launch a browser |
 | `-dev DIR` | | Serve the UI from `DIR` (e.g. `web/dist`) instead of the embedded copy |
+
+`gospotify tui` takes the same `-port`, `-client-id` and `-no-open` (here, it just prints the login URL
+instead of opening it), plus `-no-color`. It shares the same config file, so logging in once works for
+both front ends.
 
 ## Play any Spotify link
 
@@ -89,6 +114,10 @@ Spotify. Other lists (liked, search, recent) are queued as tracks from the one y
 | `Tab` | Switch focus browser ↔ settings (`↑/↓` select, `←/→` change) |
 | `Ctrl+K` | Help |
 
+Keys are the same in `gospotify tui`, minus `f` (fullscreen) and `m` (mute), which don't apply to a
+terminal. There's no special paste shortcut either — pasting into the `/` or `o` prompt (most terminals
+paste on `Cmd/Ctrl+V` or a middle click) works the same as typing a link. `Ctrl+C` or `q` quits.
+
 ## Differences from vstream
 
 Spotify streams are DRM-protected, so the page can't read or process the audio:
@@ -104,13 +133,17 @@ playlists show a single "Play" row, which plays the whole playlist.
 ## Development
 
 ```
-main.go      flags, startup narration, browser launch, graceful shutdown
-auth.go      Authorization Code + PKCE login, token refresh
-spotify.go   Web API client (paging, 429 retry) and object types
-library.go   the library as a folder tree (/api/files)
-resolve.go   Spotify links → what to open and play (/api/resolve)
-server.go    routes, playback actions, embedded UI
-web/         React UI, bundled by Bun into web/dist (embedded via go:embed)
+main.go       flags, startup narration, browser launch, graceful shutdown
+auth.go       Authorization Code + PKCE login, token refresh
+spotify.go    Web API client (paging, 429 retry) and object types
+library.go    the library as a folder tree (/api/files)
+resolve.go    Spotify links → what to open and play (/api/resolve)
+player.go     playback state and commands, shared by the server and the terminal UI
+session.go    configured/logged-in/user status, shared by the server and the terminal UI
+server.go     routes, the embedded browser UI
+tui*.go       the terminal UI (Bubble Tea): model/update, key handling, rendering
+update.go     `gospotify update`: fetch, verify and install the latest release in place
+web/          React UI, bundled by Bun into web/dist (embedded via go:embed)
 ```
 
 ```bash
